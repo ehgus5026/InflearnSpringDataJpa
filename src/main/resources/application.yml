@@ -14,4 +14,4 @@ spring:
 
 logging.level:
   org.hibernate.SQL: debug # 로그 파일로 남기기
-  org.hibernate.type: trace # 파라미터 바인딩되는 값들까지 다 보임
+#  org.hibernate.type: trace # 파라미터 바인딩되는 값들까지 다 보임

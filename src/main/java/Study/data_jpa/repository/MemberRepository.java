@@ -14,6 +14,16 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 매우 중요 !!!
+ * save() 메서드
+ * 새로운 엔티티면 저장(persist), 새로운 엔티티가 아니면 병합(merge) -> DB에 있는 데이터를 가져와서 save한 데이터로 바꿔치기해서 넣기.(merge는 업데이트, 세이브할 때 쓰지 말자. 변경은 엔티티의 값을 변경해서 변경 감지가 일어나서 바뀌는 거로 쓰자.)
+ * 새로운 엔티티를 구별하는 방법
+ *  -새로운 엔티티를 판단하는 기본 전략
+ *  -식별자가 객체일 때 `null` 로 판단
+ *  -식별자가 자바 기본 타입일 때 0 으로 판단
+ *  -Persistable 인터페이스를 구현해서 판단 로직 변경 가능
+ */
 public interface MemberRepository extends JpaRepository<Member, Long>, MemberRepositoryCustom {
     /**
      * ** 스프링 데이터 JPA가 제공하는 쿼리 메소드 기능 **

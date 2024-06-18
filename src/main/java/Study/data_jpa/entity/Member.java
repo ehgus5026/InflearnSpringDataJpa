@@ -11,7 +11,8 @@ import lombok.*;
 //@NamedQuery(    // 실무에서 거의 안씀.
 //        name="Member.findByUsername", // 아무렇게 줘도 됨, 관례상 이렇게 줬음.
 //        query="select m from Member m where m.username = :username")
-public class Member {
+//@NamedEntityGraph(name = "Member.all", attributeNodes = @NamedAttributeNode("team"))
+public class Member extends BaseEntity {
 
     @Id
     @GeneratedValue

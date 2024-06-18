@@ -3,14 +3,18 @@ package Study.data_jpa.repository;
 
 import Study.data_jpa.dto.MemberDto;
 import Study.data_jpa.entity.Member;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
+import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
 
-public interface MemberRepository extends JpaRepository<Member, Long> {
+public interface MemberRepository extends JpaRepository<Member, Long>, MemberRepositoryCustom {
     /**
      * ** 스프링 데이터 JPA가 제공하는 쿼리 메소드 기능 **
      * 조회: find...By, read...By, query...By, get...By
@@ -68,6 +72,104 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
      */
     List<Member> findListByUsername(String username); // 컬렉션
     Member findMemberByUsername(String username); // 단건
-    Optional<Member> findOptionalByUsername(String username); // 단건 Optional (데이터가 있을 수도, 없을 수도 있을 때 null을 감싸고 싶으면)
+    Optional<Member> findOptionalByUsername(String username); // 단건 Optional (데이터가 있을 수도, 없을 수도 있을 때 null을 감싸고 싶으면 -> Optional.empty)
+
+    /**
+     * 페이징과 정렬 파라미터
+     * org.springframework.data.domain.Sort : 정렬 기능
+     * org.springframework.data.domain.Pageable : 페이징 기능 (내부에 Sort 포함)
+     *
+     * 특별한 반환 타입
+     * org.springframework.data.domain.Page : 추가 count 쿼리 결과를 포함하는 페이징
+     * org.springframework.data.domain.Slice : 추가 count 쿼리 없이 다음 페이지만 확인 가능(내부적으로 limit +1 조회)
+     * List (자바 컬렉션): 추가 count 쿼리 없이 결과만 반환
+     *
+     * 페이징과 정렬 사용 예제
+     * Page<Member> findByUsername(String name, Pageable pageable); // count 쿼리 사용
+     * Slice<Member> findByUsername(String name, Pageable pageable); // count 쿼리 사용 안함
+     * List<Member> findByUsername(String name, Pageable pageable); // count 쿼리 사용 안함
+     * List<Member> findByUsername(String name, Sort sort);
+     */
+    // 반환 타입에 따라 getTotalCount를 날릴 지 안 날릴 지 결정함.
+//    Page<Member> findByAge(int age, Pageable pageable);
+//    Slice<Member> findByAge(int age, Pageable pageable); // Slice (count X) 추가로 limit +1을 조회한다. 그래서 다음 페이지 여부 확인(최근 모바일 리스트 생각해보면 됨)
+
+    // count 쿼리를 다음과 같이 분리할 수 있음.
+    // (이건 복잡한 sql에서 사용, 데이터는 left join, 카운트는 left join 안해도 됨)
+    // 실무에서 매우 중요!!!, 참고: 전체 count 쿼리는 매우 무겁다.
+    // 스프링 부트 3 이상을 사용하면 하이버네이트 6이 적용된다.
+    // 이 경우 하이버네이트 6에서 의미없는 left join을 최적화 해버린다. 따라서
+    // 다음을 실행하면 SQL이 LEFT JOIN을 하지 않는 것으로 보인다. (@Query(value = "select m from Member m left join m.team t")
+    /**
+     * 하이버네이트 6은 이런 경우 왜 left join을 제거하는 최적화를 할까? 실행한 JPQL을 보면 left join을 사용하고 있다.
+     * select m from Member m left join m.team t
+     * Member 와 Team 을 조인을 하지만 사실 이 쿼리를 Team 을 전혀 사용하지 않는다. select 절이나, where 절에서
+     * 사용하지 않는 다는 뜻이다. 그렇다면 이 JPQL은 사실상 다음과 같다.
+     * select m from Member m
+     * left join 이기 때문에 왼쪽에 있는 member 자체를 다 조회한다는 뜻이 된다.
+     * 만약 select 나, where 에 team 의 조건이 들어간다면 정상적인 join 문이 보인다. JPA는 이 경우 최적화를 해서 join 없이 해당 내용만으로 SQL을 만든다.
+     * 여기서 만약 Member 와 Team 을 하나의 SQL로 한번에 조회하고 싶으시다면 JPA가 제공하는 fetch join 을 사용 해야한다.
+     * select m from Member m left join fetch m.team t 이 경우에도 SQL에서 join문은 정상 수행된다.
+     */
+    @Query(value = "select m from Member m",
+            countQuery = "select count(m.username) from Member m")
+    Page<Member> findByAge(int age, Pageable pageable);
+
+    /**
+     * 벌크성 쿼리를 실행하고 나서 영속성 컨텍스트 초기화: @Modifying(clearAutomatically = true)
+     * (이 옵션의 기본값은 false)
+     * 이 옵션 없이 회원을 findById 로 다시 조회하면 영속성 컨텍스트에 과거 값이 남아서 문제가 될 수 있다.
+     * 만약 다시 조회해야 하면 꼭 영속성 컨텍스트를 초기화 하자.
+     * save, update는 디비로 먼저 쿼리 쳐줌.
+     */
+    @Modifying(clearAutomatically = true) // 이걸 해줘야 JPA의 executeUpdate() 같은 기능을 해줌. 안 해주면 resultList나 singleResult 이런걸 호출함.
+    @Query("update Member m set m.age = m.age + 1 where m.age >= :age")
+    int bulkAgePlus(@Param("age") int age);
+
+    /**
+     * Entity Graph
+     * 페치 조인 하려면 JPQL을 작성해야 하는데 Spring Data JPA 에서는 편리하게 할 수 있음.
+     */
+    @Query("select m from Member m left join fetch m.team t")
+    List<Member> findMemberFetchJoin();
+
+    @Override
+    @EntityGraph(attributePaths = {"team"}) // JPQL 안 쓰고 페치 조인 쓰기
+    List<Member> findAll();
+
+    // JPQL + 엔티티그래프
+    @Query("select m from Member m")
+    @EntityGraph(attributePaths = {"team"})
+    List<Member> findMemberEntityGraph();
+
+    // 메서드 이름으로 쿼리에서 특히 편리하다.
+//    @EntityGraph("Member.all") // NamedEntityGraph
+    @EntityGraph(attributePaths = {"team"})
+    List<Member> findEntityGraphByUsername(@Param("username") String username);
+
+    /**
+     * JPA Hint
+     * JPA 쿼리 힌트(SQL 힌트가 아니라 JPA 구현체에게 제공하는 힌트)
+     * forCounting : 반환 타입으로 Page 인터페이스를 적용하면
+     * 추가로 호출하는 페이징을 위한 count 쿼리도 쿼리 힌트 적용(기본값 true)
+     */
+    /*@QueryHints(value = { @QueryHint(name = "org.hibernate.readOnly",
+            value = "true")},
+            forCounting = true)
+    Page<Member> findByUsername(String name, Pageable pageable);*/
+
+    @QueryHints(value = @QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Member findReadOnlyByUsername(String username);
+
+    /**
+     * LOCK
+     * select for update
+     * 실시간 트래픽이 많은 서비스에서 가급적이면 lock을 걸면 안됨.
+     * 실시간 트래픽이 많지 않고, 중요한 돈을 맞추는 이런 경우는 좋을 수도.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    List<Member> findLockByUsername(String username);
+
 
 }
+

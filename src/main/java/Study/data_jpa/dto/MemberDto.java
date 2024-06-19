@@ -2,11 +2,14 @@ package Study.data_jpa.dto;
 
 
 import Study.data_jpa.entity.Member;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 @Data
 @AllArgsConstructor
+@NoArgsConstructor(access = AccessLevel.PUBLIC) // MemberRepository에서 동적 네이티브 쿼리 테스트 하려고(428줄)
 public class MemberDto {
 
     private Long id;

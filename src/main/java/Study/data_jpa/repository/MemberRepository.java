@@ -7,7 +7,6 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 
@@ -34,7 +33,7 @@ import java.util.Optional;
  *  -식별자가 자바 기본 타입일 때 0 으로 판단
  *  -Persistable 인터페이스를 구현해서 판단 로직 변경 가능
  */
-public interface MemberRepository extends JpaRepository<Member, Long>, MemberRepositoryCustom {
+public interface MemberRepository extends JpaRepository<Member, Long>, MemberRepositoryCustom , JpaSpecificationExecutor<Member> { // JpaSpecificationExecutor : Specifications(JPA Criteria를 활용)
     /**
      * ** 스프링 데이터 JPA가 제공하는 쿼리 메소드 기능 **
      * 조회: find...By, read...By, query...By, get...By
@@ -123,13 +122,17 @@ public interface MemberRepository extends JpaRepository<Member, Long>, MemberRep
     /**
      * 하이버네이트 6은 이런 경우 왜 left join을 제거하는 최적화를 할까? 실행한 JPQL을 보면 left join을 사용하고 있다.
      * select m from Member m left join m.team t
-     * Member 와 Team 을 조인을 하지만 사실 이 쿼리를 Team 을 전혀 사용하지 않는다. select 절이나, where 절에서
-     * 사용하지 않는 다는 뜻이다. 그렇다면 이 JPQL은 사실상 다음과 같다.
-     * select m from Member m
+     * Member 와 Team 을 조인을 하지만 사실 이 쿼리를 Team 을 전혀 사용하지 않는다. select 절이나, where 절에서 사용하지 않는 다는 뜻이다.
+     * 그렇다면 이 JPQL은 사실상 다음과 같다.
+     * 'select m from Member m'
      * left join 이기 때문에 왼쪽에 있는 member 자체를 다 조회한다는 뜻이 된다.
      * 만약 select 나, where 에 team 의 조건이 들어간다면 정상적인 join 문이 보인다. JPA는 이 경우 최적화를 해서 join 없이 해당 내용만으로 SQL을 만든다.
      * 여기서 만약 Member 와 Team 을 하나의 SQL로 한번에 조회하고 싶으시다면 JPA가 제공하는 fetch join 을 사용 해야한다.
      * select m from Member m left join fetch m.team t 이 경우에도 SQL에서 join문은 정상 수행된다.
+     *
+     * countQuery는 내부에서 최적화를 한다. 그래서 count 쿼리가 필요하지 않으면 호출하지 않음.
+     * 예를 들어서 페이지를 10건 단위로 하는데, 처음에 2건만 조회되면 사실 count가 2로 정해졌기 때문에 count 쿼리를 호출할 필요가 없는 것.
+     * 이런식으로 최대한 최적화.
      */
     @Query(value = "select m from Member m",
             countQuery = "select count(m.username) from Member m")
@@ -190,6 +193,51 @@ public interface MemberRepository extends JpaRepository<Member, Long>, MemberRep
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     List<Member> findLockByUsername(String username);
 
+    /**
+     * Projections
+     * 엔티티 대신에 DTO를 편리하게 조회할 때 사용.
+     * 전체 엔티티가 아니라 만약 회원 이름만 딱 조회하고 싶으면?
+     */
+//    List<UsernameOnly> findProjectionsByUsername(@Param("username") String username); //  인터페이스 기반 Projections
+//    List<UsernameOnlyDto> findProjectionsByUsername(@Param("username") String username); // **클래스(DTO) 기반 Projection**
+    <T> List<T> findProjectionsByUsername(@Param("username") String username, Class<T> type); // **동적 Projections**
+
+    /**
+     * 네이티브 쿼리
+     * 가급적 네이티브 쿼리는 사용하지 않는게 좋음, 정말 어쩔 수 없을 때 사용.
+     * 최근에 나온 궁극의 방법 스프링 데이터 Projections 활용.
+     *
+     * 스프링 데이터 JPA 기반 네이티브 쿼리
+     * # 페이징 지원
+     * # 반환 타입
+     *  -Object[]
+     *  -Tuple
+     *  -DTO(스프링 데이터 인터페이스 Projections 지원)
+     * # 제약
+     *  -Sort 파라미터를 통한 정렬이 정상 동작하지 않을 수 있음(믿지 말고 직접 처리)
+     *  -JPQL처럼 애플리케이션 로딩 시점에 문법 확인 불가
+     *  -동적 쿼리 불가
+     *
+     * JPQL은 위치 기반 파리미터를 1부터 시작하지만 네이티브 SQL은 0부터 시작.
+     * 네이티브 SQL을 엔티티가 아닌 DTO로 변환은 하려면
+     *  -DTO 대신 JPA TUPLE 조회
+     *  -DTO 대신 MAP 조회
+     *  -@SqlResultSetMapping -> 복잡
+     *  -Hibernate ResultTransformer를 사용해야함 -> 복잡
+     *  -네이티브 SQL을 DTO로 조회할 때는 JdbcTemplate or myBatis 권장(스프링 데이터 JPA는 Projections 활용.)
+     */
+    @Query(value = "select * from member where username = ?", nativeQuery = true)
+    Member findByNativeQuery(String username);
+
+    /**
+     * **Projections 활용**
+     * 예) 스프링 데이터 JPA 네이티브 쿼리 + 인터페이스 기반 Projections 활용 + 페이징
+     */
+    @Query(value = "select m.member_id id, m.username, t.name teamName " +
+            "from member m left join team t",
+            countQuery = "select count(*) from member",
+            nativeQuery = true)
+    Page<MemberProjection> findByNativeProjection(Pageable pageable);
 
 }
 

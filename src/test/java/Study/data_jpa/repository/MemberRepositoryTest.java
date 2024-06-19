@@ -5,13 +5,14 @@ import Study.data_jpa.entity.Member;
 import Study.data_jpa.entity.Team;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.assertj.core.api.Assertions;
+import org.hibernate.query.NativeQuery;
+import org.hibernate.transform.Transformers;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Slice;
-import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.*;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.annotation.Rollback;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,9 +20,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.as;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
 @Transactional(readOnly = true)
@@ -159,7 +158,7 @@ class MemberRepositoryTest {
         memberRepository.save(new Member("member5", 10));
 
         int age = 10;
-        PageRequest pageRequest = PageRequest.of(0, 3, Sort.Direction.DESC, "username"); // 0페이지에서 3개 가져오면서 username을 내림차순 정렬
+        PageRequest pageRequest = PageRequest.of(0, 3, Sort.Direction.DESC, "username"); // 0 페이지에서 3개 가져오면서 username을 내림차순 정렬
         
         //when
         Page<Member> page1 = memberRepository.findByAge(age, pageRequest);
@@ -283,5 +282,164 @@ class MemberRepositoryTest {
     public void callCustom() {
         List<Member> result = memberRepository.findMemberCustom();
     }
+
+    /**
+     * Specifications (명세)
+     * 참고: 실무에서는 JPA Criteria를 거의 안쓴다! 대신에 QueryDSL을 사용하자.
+     */
+    @Test
+    public void specBasic() {
+        // given
+        Team teamA = new Team("teamA");
+        em.persist(teamA);
+
+        Member m1 = new Member("m1", 0, teamA);
+        Member m2 = new Member("m2", 0, teamA);
+        em.persist(m1);
+        em.persist(m2);
+
+        em.flush();
+        em.clear();
+
+        // when
+        Specification<Member> spec = MemberSpec.username("m1").and(MemberSpec.teamName("teamA"));
+        List<Member> result = memberRepository.findAll(spec);
+
+        // then
+        Assertions.assertThat(result.size()).isEqualTo(1);
+    }
+
+    /**
+     * Query By Example
+     * **장점**
+     * 동적 쿼리를 편리하게 처리.
+     * 도메인 객체를 그대로 사용.
+     * 데이터 저장소를 RDB에서 NOSQL로 변경해도 코드 변경이 없게 추상화 되어 있음.
+     * 스프링 데이터 JPA `JpaRepository` 인터페이스에 이미 포함.
+     * **단점**
+     * 조인은 가능하지만 내부 조인(INNER JOIN)만 가능함.
+     * 외부 조인(LEFT JOIN) 안됨. 다음과 같은 중첩 제약조건 안됨.
+     *  -`firstname = ?0 or (firstname = ?1 and lastname = ?2)`
+     * 매칭 조건이 매우 단순함
+     *  -문자는 `starts/contains/ends/regex`
+     *  -다른 속성은 정확한 매칭( `=` ) 만 지원
+     *
+     * 정리
+     * 실무에서 사용하기에는 매칭 조건이 너무 단순하고, LEFT 조인이 안됨
+     * 실무에서는 QueryDSL을 사용하자
+     */
+    @Test
+    public void queryByExample() {
+        // given
+        Team teamA = new Team("teamA");
+        em.persist(teamA);
+
+        Member m1 = new Member("m1", 0, teamA);
+        Member m2 = new Member("m2", 0, teamA);
+        em.persist(m1);
+        em.persist(m2);
+
+        em.flush();
+        em.clear();
+
+        // when
+        // Probe : 필드에 데이터가 있는 실제 도메인 객체
+        Member member = new Member("m1"); // 도메인 객체를 만들고
+        Team team = new Team("teamA"); // m1 이면서 teamA 인 멤버들 다 찾으려면
+        member.setTeam(team);
+
+        ExampleMatcher matcher = ExampleMatcher.matching() // ExampleMatcher: 특정 필드를 일치시키는 상세한 정보 제공, 재사용 가능
+                .withIgnorePaths("age"); // age 필드 제외
+
+        Example<Member> example = Example.of(member, matcher); // 만든 도메인 객체를 통으로 넣기.
+
+        List<Member> result = memberRepository.findAll(example);
+
+        // then
+        assertThat(result.get(0).getUsername()).isEqualTo("m1");
+    }
+
+    // Projections
+    // 엔티티 대신에 DTO를 편리하게 조회할 때 사용
+    // 전체 엔티티가 아니라 만약 회원 이름만 딱 조회하고 싶으면?
+    @Test
+    public void projections() {
+        // given
+        Team teamA = new Team("teamA");
+        em.persist(teamA);
+
+        Member m1 = new Member("m1", 0, teamA);
+        Member m2 = new Member("m2", 0, teamA);
+        em.persist(m1);
+        em.persist(m2);
+
+        em.flush();
+        em.clear();
+
+        // when
+//        List<UsernameOnly> result = memberRepository.findProjectionsByUsername("m1");
+//        List<UsernameOnlyDto> result = memberRepository.findProjectionsByUsername("m1");
+//        List<UsernameOnlyDto> result = memberRepository.findProjectionsByUsername("m1", UsernameOnlyDto.class);
+        List<NestedClosedProjections> result = memberRepository.findProjectionsByUsername("m1", NestedClosedProjections.class);
+
+//        for (UsernameOnly userNameOnly : result) {
+//            System.out.println("userNameOnly = " + userNameOnly.getUsername());
+//        }
+//        for (UsernameOnlyDto usernameOnlyDto : result) {
+//            System.out.println("usernameOnlyDto = " + usernameOnlyDto.getUsername());
+//        }
+
+        // member는 딱 username만 검색하지만 team은 다 끌어와서 조회함.
+        for (NestedClosedProjections nestedClosedProjections : result) {
+            String username = nestedClosedProjections.getUsername();
+            String teamName = nestedClosedProjections.getTeam().getName();
+            System.out.println("username = " + username);
+            System.out.println("teamName = " + teamName);
+        }
+    }
+
+    @Test
+    public void nativeQuery() {
+        // given
+        Team teamA = new Team("teamA");
+        em.persist(teamA);
+
+        Member m1 = new Member("m1", 0, teamA);
+        Member m2 = new Member("m2", 0, teamA);
+        em.persist(m1);
+        em.persist(m2);
+
+        em.flush();
+        em.clear();
+
+        // when
+//        Member result = memberRepository.findByNativeQuery("m1");
+//        System.out.println("result = " + result);
+        Page<MemberProjection> result = memberRepository.findByNativeProjection(PageRequest.of(0, 10));
+        List<MemberProjection> content = result.getContent();
+        for (MemberProjection memberProjection : content) {
+            System.out.println("memberProjection = " + memberProjection.getUsername());
+            System.out.println("memberProjection = " + memberProjection.getTeamName());
+        }
+
+        // 동적 네이티브 쿼리
+        // 하이버네이트를 직접 활용
+        // 근데 이것보단, 스프링 JdbcTemplate, myBatis, jooq같은 외부 라이브러리 사용
+//        String sql = "select m.username as username from member m";
+//
+//        List<MemberDto> result1 = em.createNativeQuery(sql)
+//                .setFirstResult(0)
+//                .setMaxResults(10)
+//                .unwrap(NativeQuery.class)
+//                .addScalar("username")
+//                .setResultTransformer(Transformers.aliasToBean(MemberDto.class))
+//                .getResultList();
+
+//        for (MemberDto memberDto : result1) {
+//            System.out.println("memberDto = " + memberDto);
+//        }
+
+    }
+
 
 }
